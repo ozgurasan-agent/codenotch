@@ -413,6 +413,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // up as one thing and then change its mind.
             statusItem.limits = preferences.menuBarLimits
             statusItem.resetTimeFormat = preferences.resetTimeFormat
+            statusItem.showsWeeklyLimit = preferences.showsWeeklyLimitInMenuBar
+            statusItem.watchLimit = preferences.watchLimit
+            statusItem.criticalLimit = preferences.criticalLimit
+            statusItem.accentColor = preferences.accentColor
 
             preferences.$appPresence
                 .receive(on: RunLoop.main)
@@ -434,6 +438,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // menu, which the run loop's default mode would hold back.
                 .receive(on: DispatchQueue.main)
                 .sink { [weak statusItem] in statusItem?.limits = $0 }
+                .store(in: &cancellables)
+
+            // Presentation only, like the parent limit switch: redraw from the
+            // current snapshots immediately and never start another fetch.
+            preferences.$showsWeeklyLimitInMenuBar
+                .removeDuplicates()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak statusItem] in statusItem?.showsWeeklyLimit = $0 }
                 .store(in: &cancellables)
 
             preferences.$notchVisibility
@@ -545,14 +557,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             preferences.$accentColor
                 .receive(on: RunLoop.main)
-                .sink { [weak fleet] in fleet?.apply(accentColor: $0) }
+                .sink { [weak fleet, weak statusItem] in
+                    fleet?.apply(accentColor: $0)
+                    statusItem?.accentColor = $0
+                }
                 .store(in: &cancellables)
             
             preferences.$watchLimit
                 .combineLatest(preferences.$criticalLimit)
-                .receive(on: RunLoop.main)
-                .sink { [weak fleet] watch, critical in
+                // Dispatch remains live during AppKit menu tracking, so an
+                // open standardized row can reclassify without a refresh.
+                .receive(on: DispatchQueue.main)
+                .sink { [weak fleet, weak statusItem] watch, critical in
                     fleet?.apply(watchLimit: watch, criticalLimit: critical)
+                    statusItem?.watchLimit = watch
+                    statusItem?.criticalLimit = critical
                 }
                 .store(in: &cancellables)
 

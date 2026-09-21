@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// The menu bar icon, present only while `AppPresence.menuBar` is chosen.
 ///
@@ -50,12 +51,34 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var resetTimeFormat: ResetTimeFormat = .automatic {
         didSet {
             guard resetTimeFormat != oldValue else { return }
+            menuAppearance.resetTimeFormat = resetTimeFormat
+            updateButton()
+        }
+    }
+    /// Shared Appearance thresholds for every percentage bar in the opened
+    /// menu. They update its SwiftUI rows in place and never refresh usage.
+    var watchLimit: Double = 0.50 {
+        didSet { menuAppearance.watchLimit = watchLimit }
+    }
+    var criticalLimit: Double = 0.70 {
+        didSet { menuAppearance.criticalLimit = criticalLimit }
+    }
+    var accentColor: AccentColorChoice = .system {
+        didSet { menuAppearance.accentColor = accentColor }
+    }
+    /// Adds the compact weekly-consumption ring to each provider that has a
+    /// valid weekly reading. Presentation only; changing it redraws from the
+    /// snapshots already held here and never asks the store to refresh.
+    var showsWeeklyLimit: Bool = false {
+        didSet {
+            guard showsWeeklyLimit != oldValue else { return }
             updateButton()
         }
     }
     /// What the item shows now, so a publication that changes nothing on it —
     /// a local runtime is re-read every second — redraws nothing.
     private var summary: StatusItemSummary?
+    private let menuAppearance = StatusMenuUsageAppearance()
     /// Wakes the item when its first countdown next changes, since the minutes
     /// run down between readings. One-shot and re-armed on every update: a
     /// minute's precision is all the bar shows.
@@ -109,7 +132,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func updateButton(now: Date = Date()) {
         guard let item, let button = item.button else { return }
         let next = StatusItemSummary.make(from: snapshots, showing: limits, now: now,
-                                          format: resetTimeFormat)
+                                          format: resetTimeFormat,
+                                          showingWeeklyLimit: showsWeeklyLimit)
         scheduleCountdown(at: next.nextChange)
         guard next != summary else { return }
         summary = next
@@ -165,13 +189,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             menu.addItem(empty)
         } else {
             let cells = cells()
-            for snapshot in snapshots {
-                menu.addItem(headerItem(for: snapshot, now: now))
-                for line in Self.detailLines(for: snapshot, cells: cells, activity: activity, now: now) {
-                    let row = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-                    row.isEnabled = false
-                    row.indentationLevel = 1
-                    menu.addItem(row)
+            for (index, snapshot) in snapshots.enumerated() {
+                if index > 0 { menu.addItem(.separator()) }
+                if snapshot.kind == .usage {
+                    menu.addItem(usageSectionItem(for: snapshot, in: menu, now: now))
+                } else {
+                    menu.addItem(headerItem(for: snapshot, now: now))
+                    for line in Self.detailLines(for: snapshot, cells: cells, activity: activity, now: now) {
+                        let row = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+                        row.isEnabled = false
+                        row.indentationLevel = 1
+                        menu.addItem(row)
+                    }
                 }
             }
         }
@@ -256,7 +285,37 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let header = NSMenuItem(title: title, action: #selector(refreshProvider(_:)), keyEquivalent: "")
         header.target = self
         header.representedObject = snapshot.id
+        let renderer = ImageRenderer(content:
+            ProviderGlyphView(glyph: snapshot.glyph,
+                              customIconFilename: snapshot.customIconFilename,
+                              size: 16)
+                .foregroundStyle(.primary)
+                .frame(width: 16, height: 16)
+        )
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        header.image = renderer.nsImage
         return header
+    }
+
+    /// One custom menu item owns the entire standardized provider section.
+    /// Its title/action remain populated for menu accessibility and tests;
+    /// the visible SwiftUI header invokes the same provider refresh closure.
+    private func usageSectionItem(for snapshot: ProviderSnapshot, in menu: NSMenu,
+                                  now: Date) -> NSMenuItem {
+        let item = NSMenuItem(title: "\(snapshot.displayName) — \(Self.headline(for: snapshot))",
+                              action: #selector(refreshProvider(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = snapshot.id
+
+        let section = ProviderUsageSection(snapshot: snapshot, now: now,
+                                           appearance: menuAppearance) { [weak self, weak menu] in
+            menu?.cancelTracking()
+            self?.onRefreshProvider?(snapshot.id)
+        }
+        let hosting = NSHostingView(rootView: section)
+        hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        item.view = hosting
+        return item
     }
 
     /// A runtime has no headline figure of its own; its models have. The row

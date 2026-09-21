@@ -27017,6 +27017,45 @@
         }
       }
     },
+    "Normal": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": { "stringUnit": { "state": "translated", "value": "Normal" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Normal" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "正常" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Normal" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Норма" } },
+        "uk": { "stringUnit": { "state": "translated", "value": "Норма" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "正常" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "正常" } }
+      }
+    },
+    "Watch": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": { "stringUnit": { "state": "translated", "value": "Beobachten" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Attention" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "注意" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Atenção" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Внимание" } },
+        "uk": { "stringUnit": { "state": "translated", "value": "Увага" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "关注" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "關注" } }
+      }
+    },
+    "Critical": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": { "stringUnit": { "state": "translated", "value": "Kritisch" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Critique" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "危険" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Crítico" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Критично" } },
+        "uk": { "stringUnit": { "state": "translated", "value": "Критично" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "危急" } },
+        "zh-Hant": { "stringUnit": { "state": "translated", "value": "危急" } }
+      }
+    },
     "Watch limit": {
       "extractionState": "manual",
       "localizations": {
@@ -28193,6 +28232,9 @@
         }
       }
     },
+    "Adds a compact weekly-usage ring around each chosen provider that publishes it.": {
+      "extractionState": "manual"
+    },
     "Show limit information in menu bar": {
       "extractionState": "manual",
       "localizations": {
@@ -28245,6 +28287,9 @@
           }
         }
       }
+    },
+    "Show weekly limit in menu bar": {
+      "extractionState": "manual"
     },
     "Swaps the icon for each chosen provider's five-hour limit — how much is used and how long until it resets.": {
       "extractionState": "manual",

@@ -1331,8 +1331,8 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(details, ["Sign in to Codex to read your usage"])
     }
 
-    /// The header carries the headline figure and the reading's age — the same
-    /// pair the tooltip header shows.
+    /// The provider section carries the refresh action and accessibility title;
+    /// its visible custom view owns all normalized limit rows.
     func testTheMenuListsEveryProviderWithRefreshAndSettings() {
         let controller = StatusItemController(onOpenSettings: {})
         controller.snapshots = [snapshot(
@@ -1345,9 +1345,7 @@ final class StatusMenuTests: XCTestCase {
         controller.rebuild(menu: menu, now: now)
         let titles = menu.items.map(\.title)
         XCTAssertTrue(titles[0].contains("Codex — 29%"), titles[0])
-        XCTAssertTrue(titles[0].contains("20 hr 21 min ago"), titles[0])
-        XCTAssertTrue(titles[1].contains("Weekly limit"), titles[1])
-        XCTAssertTrue(titles[1].contains("29% Used · 71% left"), titles[1])
+        XCTAssertNotNil(menu.items[0].view)
         XCTAssertTrue(titles.contains("Refresh all"))
         XCTAssertTrue(titles.contains("Settings…"))
         XCTAssertTrue(titles.contains("Quit Codenotch"))
