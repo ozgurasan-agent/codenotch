@@ -56,6 +56,22 @@ final class StatusMenuUsagePresentationTests: XCTestCase {
         XCTAssertNil(unknownRow.band(watchLimit: 0.50, criticalLimit: 0.70))
     }
 
+    func testZeroUsedSessionAndWeeklyKeepAnEmptyBar() {
+        for (id, duration, weeklyID) in [
+            ("session", TimeInterval(5 * 3600), nil),
+            ("weekly", TimeInterval(7 * 86400), "weekly")
+        ] {
+            let window = LimitWindow(id: id, label: id, usedFraction: 0,
+                                     duration: duration)
+            let source = snapshot(windows: [window], weeklyID: weeklyID)
+            let row = UsageLimitPresentation(window: window, snapshot: source)
+
+            XCTAssertEqual(row.valueText, "0%")
+            XCTAssertEqual(row.usedFraction, 0)
+            XCTAssertEqual(StandardUsageProgressBar(fraction: 0, band: .ample).fillFraction, 0)
+        }
+    }
+
     func testEveryRequestedThresholdBoundaryUsesTheSharedResolver() throws {
         let values: [(Double, UsageBand)] = [
             (0.00, .ample), (0.25, .ample),

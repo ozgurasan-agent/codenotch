@@ -94,6 +94,20 @@ final class OllamaUsageTests: XCTestCase {
         XCTAssertNil(session?.resetsAt)
     }
 
+    func testFreshLegacySessionAndWeeklyStayVisibleAtZeroUsed() throws {
+        let fresh = """
+        { "limits": {
+            "session": { "usage": 0, "models": [] },
+            "weekly":  { "usage": 0, "models": [] }
+          } }
+        """
+        let result = try OllamaUsage.parse(fresh)
+
+        XCTAssertEqual(result.windows.map(\.id), ["session", "weekly"])
+        XCTAssertEqual(result.windows.compactMap(\.usedFraction), [0, 0])
+        XCTAssertEqual(result.headlineID, "weekly")
+    }
+
     // MARK: - Edge cases
 
     func testEmptyUsageThrowsNothingMetered() {

@@ -67,7 +67,9 @@ enum OllamaUsage {
 
         // Legacy: session and weekly windows, each with its own fraction.
         if let session = limits["session"] as? [String: Any] {
-            if let usage = session["usage"] as? Double, usage > 0 {
+            // Zero is a valid fresh window. Keep it so the shared menu can
+            // show "0%" with an empty bar instead of dropping the limit row.
+            if let usage = session["usage"] as? Double, usage.isFinite, usage >= 0 {
                 windows.append(LimitWindow(
                     id: "session", label: L10n.t("Session usage"),
                     usedFraction: usage, resetsAt: nil
@@ -78,7 +80,7 @@ enum OllamaUsage {
         }
 
         if let weekly = limits["weekly"] as? [String: Any] {
-            if let usage = weekly["usage"] as? Double, usage > 0 {
+            if let usage = weekly["usage"] as? Double, usage.isFinite, usage >= 0 {
                 windows.append(LimitWindow(
                     id: "weekly", label: L10n.t("Weekly usage"),
                     usedFraction: usage, resetsAt: nil

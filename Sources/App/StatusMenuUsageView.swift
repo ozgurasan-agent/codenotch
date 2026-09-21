@@ -274,16 +274,18 @@ struct StandardUsageProgressBar: View {
     let band: UsageBand
     @Environment(\.codenotchAccentColor) private var accentColor
 
-    private var clamped: CGFloat { CGFloat(min(max(fraction, 0), 1)) }
+    /// Kept visible to tests because zero has a precise UI contract: retain
+    /// the track but draw no colored fill.
+    var fillFraction: CGFloat { CGFloat(min(max(fraction, 0), 1)) }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(Palette.barTrack)
-                if clamped > 0 {
+                if fillFraction > 0 {
                     Capsule()
                         .fill(band.color(accent: accentColor))
-                        .frame(width: proxy.size.width * clamped)
+                        .frame(width: proxy.size.width * fillFraction)
                 }
             }
         }
