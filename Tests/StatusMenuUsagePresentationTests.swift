@@ -120,15 +120,37 @@ final class StatusMenuUsagePresentationTests: XCTestCase {
         XCTAssertEqual(restarted.criticalLimit, 0.88)
     }
 
-    func testResetFormattingUsesTheOneSharedPreference() {
-        let reset = now.addingTimeInterval(2 * 3600 + 18 * 60)
-        let window = LimitWindow(id: "session", label: "Session", usedFraction: 0.5,
-                                 resetsAt: reset)
-        let row = UsageLimitPresentation(window: window, snapshot: snapshot(windows: [window]))
+    func testDetailedResetUsesTheNormalizedLimitKind() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Amsterdam"))
+        calendar.locale = Locale(identifier: "en_GB")
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 21, hour: 14
+        )))
 
-        XCTAssertEqual(row.resetText(now: now, format: .remaining), "Resets in 2h 18m")
-        XCTAssertNotEqual(row.resetText(now: now, format: .automatic),
-                          row.resetText(now: now, format: .remaining))
+        let sessionReset = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 21, hour: 16, minute: 18
+        )))
+        let session = LimitWindow(id: "session", label: "Session", usedFraction: 0.5,
+                                  resetsAt: sessionReset, duration: 5 * 3600)
+        let sessionRow = UsageLimitPresentation(
+            window: session, snapshot: snapshot(windows: [session])
+        )
+        XCTAssertEqual(sessionRow.resetText(now: now, calendar: calendar,
+                                            locale: Locale(identifier: "en_GB")),
+                       "Resets in 2h 18m (16:18)")
+
+        let weeklyReset = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 21, hour: 18, minute: 30
+        )))
+        let weekly = LimitWindow(id: "weekly", label: "Weekly limit", usedFraction: 0.5,
+                                 resetsAt: weeklyReset, duration: 7 * 86400)
+        let weeklyRow = UsageLimitPresentation(
+            window: weekly, snapshot: snapshot(windows: [weekly], weeklyID: "weekly")
+        )
+        XCTAssertEqual(weeklyRow.resetText(now: now, calendar: calendar,
+                                           locale: Locale(identifier: "en_GB")),
+                       "Resets in 4h 30m (Mon 18:30)")
     }
 
     func testMenuUsesOneCustomProviderSectionForOneOrManyLimits() throws {
@@ -153,6 +175,47 @@ final class StatusMenuUsagePresentationTests: XCTestCase {
                        ["provider", "second"])
     }
 
+    /// A compact visual fixture for the two reset-date policies in the real
+    /// status-menu section. Set `CODENOTCH_RESET_VISUAL_OUTPUT` to retain the
+    /// rendered PNG for human inspection.
+    func testResetFormattingGalleryRendersSessionAndWeeklyRows() throws {
+        var calendar = Calendar.current
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Amsterdam"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 21, hour: 14
+        )))
+        let sessionReset = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 21, hour: 16, minute: 18
+        )))
+        let weeklyReset = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 24, hour: 18
+        )))
+        let windows = [
+            LimitWindow(id: "session", label: "5-hour limit", usedFraction: 0.62,
+                        resetsAt: sessionReset, duration: 5 * 3600),
+            LimitWindow(id: "weekly", label: "Weekly limit", usedFraction: 0.81,
+                        resetsAt: weeklyReset, duration: 7 * 86400)
+        ]
+        let source = snapshot(windows: windows, weeklyID: "weekly")
+        let appearance = StatusMenuUsageAppearance(watchLimit: 0.70, criticalLimit: 0.90,
+                                                   accentColor: .green)
+        let content = ProviderUsageSection(snapshot: source, now: now, appearance: appearance)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .preferredColorScheme(.light)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        let image = try XCTUnwrap(renderer.nsImage)
+        XCTAssertGreaterThan(image.size.width, 300)
+        XCTAssertGreaterThan(image.size.height, 100)
+
+        guard let path = ProcessInfo.processInfo.environment["CODENOTCH_RESET_VISUAL_OUTPUT"] else {
+            return
+        }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
     /// Renders the actual shared section at every requested boundary. The
     /// optional path is used for human visual QA; ordinary test runs still
     /// prove that the complete gallery lays out to a non-empty image.
@@ -166,7 +229,6 @@ final class StatusMenuUsagePresentationTests: XCTestCase {
         windows.append(LimitWindow(id: "unknown", label: "Unknown denominator", remaining: 17))
         let source = snapshot(windows: windows)
         let appearance = StatusMenuUsageAppearance(watchLimit: 0.70, criticalLimit: 0.90,
-                                                   resetTimeFormat: .remaining,
                                                    accentColor: .green)
         let content = ProviderUsageSection(snapshot: source, now: now, appearance: appearance)
             .background(Color(nsColor: .windowBackgroundColor))

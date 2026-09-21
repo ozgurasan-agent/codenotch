@@ -99,6 +99,31 @@ enum ResetCopy {
         return L10n.t("\(minutes / 60)h \(padded)m", locale: locale)
     }
 
+    /// Reset copy for a limit in the menu opened from the macOS status item.
+    ///
+    /// That menu has room for both useful views of one deadline: how long is
+    /// left and when it lands on the user's clock. Both strings deliberately
+    /// receive the same `resetsAt` value. Short windows omit the weekday only
+    /// when both instants belong to the same local calendar day; weekly
+    /// windows set `alwaysShowDay` because their weekday is useful even when
+    /// they happen to reset later today.
+    static func detailedLimitText(for resetsAt: Date, now: Date = Date(),
+                                  alwaysShowDay: Bool,
+                                  calendar: Calendar = .current,
+                                  locale: Locale = L10n.locale) -> String {
+        let relative = text(for: resetsAt, now: now, calendar: calendar,
+                            format: .remaining, locale: locale)
+        guard resetsAt > now else { return relative }
+
+        let includeDay = alwaysShowDay || !calendar.isDate(resetsAt, inSameDayAs: now)
+        let formatter = formatter(for: calendar)
+        formatter.locale = locale
+        // These are intentionally fixed 24-hour fields. The status menu's
+        // contract is HH:mm, while `EEE` still localizes the weekday name.
+        formatter.dateFormat = includeDay ? "EEE HH:mm" : "HH:mm"
+        return "\(relative) (\(formatter.string(from: resetsAt)))"
+    }
+
     /// When `countdown` next reads differently — the next whole minute of time
     /// left, or the reset itself in the last minute. Nil once it has passed.
     static func nextCountdownChange(to resetsAt: Date, now: Date = Date()) -> Date? {

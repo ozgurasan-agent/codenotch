@@ -106,6 +106,93 @@ final class ResetCopyTests: XCTestCase {
         }
     }
 
+    func testDetailedShortTermResetOnTheSameLocalDayShowsOnlyTime() throws {
+        let context = try detailedContext()
+        let reset = try XCTUnwrap(context.calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 21, hour: 18, minute: 30
+        )))
+
+        XCTAssertEqual(
+            ResetCopy.detailedLimitText(for: reset, now: context.now,
+                                        alwaysShowDay: false, calendar: context.calendar,
+                                        locale: context.locale),
+            "Resets in 4h 30m (18:30)"
+        )
+    }
+
+    func testDetailedShortTermResetAcrossMidnightShowsDayAndTime() throws {
+        let context = try detailedContext(hour: 23, minute: 30)
+        let reset = try XCTUnwrap(context.calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 22, hour: 0, minute: 30
+        )))
+
+        XCTAssertEqual(
+            ResetCopy.detailedLimitText(for: reset, now: context.now,
+                                        alwaysShowDay: false, calendar: context.calendar,
+                                        locale: context.locale),
+            "Resets in 1h 0m (Tue 00:30)"
+        )
+    }
+
+    func testDetailedWeeklyResetAlwaysShowsDay() throws {
+        let context = try detailedContext()
+        let reset = try XCTUnwrap(context.calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 21, hour: 18, minute: 30
+        )))
+
+        XCTAssertEqual(
+            ResetCopy.detailedLimitText(for: reset, now: context.now,
+                                        alwaysShowDay: true, calendar: context.calendar,
+                                        locale: context.locale),
+            "Resets in 4h 30m (Mon 18:30)"
+        )
+    }
+
+    func testDetailedResetUsesCalendarDaysAcrossYearBoundary() throws {
+        let context = try detailedContext(year: 2026, month: 12, day: 31, hour: 23)
+        let reset = try XCTUnwrap(context.calendar.date(from: DateComponents(
+            year: 2027, month: 1, day: 1, hour: 2
+        )))
+
+        XCTAssertEqual(
+            ResetCopy.detailedLimitText(for: reset, now: context.now,
+                                        alwaysShowDay: false, calendar: context.calendar,
+                                        locale: context.locale),
+            "Resets in 3h 0m (Fri 02:00)"
+        )
+    }
+
+    func testDetailedResetUsesLocalCalendarAcrossDaylightSavingChange() throws {
+        let context = try detailedContext(year: 2026, month: 3, day: 29,
+                                          hour: 1, minute: 30)
+        let reset = try XCTUnwrap(context.calendar.date(from: DateComponents(
+            year: 2026, month: 3, day: 29, hour: 3, minute: 30
+        )))
+
+        // Amsterdam skips 02:00 on this date. These wall-clock times are two
+        // hours apart but the canonical instants are one hour apart, and both
+        // still belong to the same local calendar day.
+        XCTAssertEqual(
+            ResetCopy.detailedLimitText(for: reset, now: context.now,
+                                        alwaysShowDay: false, calendar: context.calendar,
+                                        locale: context.locale),
+            "Resets in 1h 0m (03:30)"
+        )
+    }
+
+    private func detailedContext(year: Int = 2026, month: Int = 9, day: Int = 21,
+                                 hour: Int = 14, minute: Int = 0) throws
+        -> (calendar: Calendar, locale: Locale, now: Date) {
+        let locale = Locale(identifier: "en_GB")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Amsterdam"))
+        calendar.locale = locale
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: year, month: month, day: day, hour: hour, minute: minute
+        )))
+        return (calendar, locale, now)
+    }
+
     /// The menu bar's countdown truncates where `text` rounds: it is read
     /// against a clock, so it never claims time that is not left — "<1m" is
     /// under a minute, and "1h 00m" is gone the moment the hour is. Minutes

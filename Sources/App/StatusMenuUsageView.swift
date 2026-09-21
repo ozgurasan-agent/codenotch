@@ -8,15 +8,12 @@ import SwiftUI
 final class StatusMenuUsageAppearance: ObservableObject {
     @Published var watchLimit: Double
     @Published var criticalLimit: Double
-    @Published var resetTimeFormat: ResetTimeFormat
     @Published var accentColor: AccentColorChoice
 
     init(watchLimit: Double = 0.50, criticalLimit: Double = 0.70,
-         resetTimeFormat: ResetTimeFormat = .automatic,
          accentColor: AccentColorChoice = .system) {
         self.watchLimit = watchLimit
         self.criticalLimit = criticalLimit
-        self.resetTimeFormat = resetTimeFormat
         self.accentColor = accentColor
     }
 }
@@ -119,8 +116,13 @@ struct UsageLimitPresentation: Identifiable, Equatable {
                               criticalLimit: criticalLimit)
     }
 
-    func resetText(now: Date, format: ResetTimeFormat) -> String? {
-        resetDate.map { ResetCopy.text(for: $0, now: now, format: format) }
+    func resetText(now: Date, calendar: Calendar = .current,
+                   locale: Locale = L10n.locale) -> String? {
+        resetDate.map {
+            ResetCopy.detailedLimitText(for: $0, now: now,
+                                        alwaysShowDay: kind == .weekly,
+                                        calendar: calendar, locale: locale)
+        }
     }
 }
 
@@ -224,7 +226,7 @@ struct UsageLimitRow: View {
 
     private var accessibilityValue: String {
         [limit.valueText, severityText,
-         limit.resetText(now: now, format: appearance.resetTimeFormat)]
+         limit.resetText(now: now)]
             .compactMap { $0 }
             .joined(separator: ", ")
     }
@@ -253,7 +255,7 @@ struct UsageLimitRow: View {
                     .frame(height: 5)
             }
 
-            if let reset = limit.resetText(now: now, format: appearance.resetTimeFormat) {
+            if let reset = limit.resetText(now: now) {
                 Text(reset)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)

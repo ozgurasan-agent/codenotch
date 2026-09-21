@@ -51,7 +51,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var resetTimeFormat: ResetTimeFormat = .automatic {
         didSet {
             guard resetTimeFormat != oldValue else { return }
-            menuAppearance.resetTimeFormat = resetTimeFormat
             updateButton()
         }
     }
