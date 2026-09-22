@@ -774,16 +774,6 @@ struct SettingsView: View {
     private var appearancePane: some View {
         Form {
             Section(L10n.t("Notch")) {
-                Picker(L10n.t("Reset time"), selection: $preferences.resetTimeFormat) {
-                    ForEach(ResetTimeFormat.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-
-                Text(preferences.resetTimeFormat.explanation)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
                 Toggle(L10n.t("Show usage pace"), isOn: $preferences.showUsagePace)
                 Text(L10n.t("Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve."))
                     .font(.caption)
@@ -1006,6 +996,8 @@ struct SettingsView: View {
                 .padding(.top, 4)
             }
 
+            MenuBarSettingsSection(preferences: preferences, choices: menuBarChoices)
+
             // Apart from the notch's own group: these are about the app, not
             // the thing it draws on the screen edge.
             Section(L10n.t("App")) {
@@ -1025,26 +1017,6 @@ struct SettingsView: View {
                     }
                 }
 
-                // "App icon", not "Icon": the picker above is about the
-                // notch, and on its own the word would read as another of it.
-                Picker(L10n.t("App icon"), selection: $preferences.appPresence) {
-                    ForEach(AppPresence.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-
-                Text(preferences.appPresence.explanation)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                // Only while there is a menu bar item for it to change. With
-                // the app in the Dock or nowhere, a switch here would do
-                // nothing anyone could see; the choice is kept for when the
-                // item comes back.
-                if preferences.appPresence == .menuBar {
-                    menuBarLimitRows
-                }
-
                 Picker(L10n.t("Language"), selection: $preferences.language) {
                     ForEach(AppLanguage.allCases) { Text($0.title).tag($0) }
                 }
@@ -1057,64 +1029,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-    }
-
-    /// Limits in the menu bar: the switch, and under it one row for each
-    /// provider the bar can show.
-    ///
-    /// Each of those rows is about the menu bar alone. Whether a provider is
-    /// read at all is its own switch in Accounts, and nothing here touches it.
-    @ViewBuilder
-    private var menuBarLimitRows: some View {
-        Toggle(L10n.t("Show limit information in menu bar"), isOn: $preferences.showsLimitsInMenuBar)
-        Text(L10n.t("Swaps the icon for each chosen provider's five-hour limit — how much is used and how long until it resets."))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-
-        if preferences.showsLimitsInMenuBar {
-            Toggle(L10n.t("Show weekly limit in menu bar"),
-                   isOn: $preferences.showsWeeklyLimitInMenuBar)
-            Text(L10n.t("Adds a compact weekly-usage ring around each chosen provider that publishes it."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            ForEach(menuBarChoices) { choice in
-                Toggle(isOn: Binding(
-                    get: { preferences.isInMenuBar(choice.id) },
-                    set: { preferences.setInMenuBar($0, for: choice.id, among: menuBarChoices.map(\.id)) }
-                )) {
-                    // The mark and name as the Accounts rows draw them, so a
-                    // provider is recognisably the same one in both places.
-                    HStack(spacing: 10) {
-                        ProviderGlyphView(glyph: choice.glyph, size: 16)
-                            .accessibilityHidden(true)
-                        Text(choice.name)
-                    }
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .help(L10n.t("Shows \(choice.name)'s five-hour limit in the menu bar. Codenotch reads it either way."))
-            }
-
-            Text(menuBarChoices.isEmpty
-                 ? L10n.t("Nothing Codenotch reads has a five-hour limit to show yet. Claude and Codex do — switch one on in Accounts.")
-                 : L10n.t("Leaving a provider out keeps it off the menu bar only — Codenotch still reads it. With none chosen, the icon comes back."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // Said only once it applies: past two the item keeps each share
-            // and drops the countdowns, and past four it stops, because macOS
-            // hides a status item that does not fit rather than squeezing it.
-            if menuBarChoices.filter({ preferences.isInMenuBar($0.id) }).count > StatusItemSummary.fullEntryLimit {
-                Text(L10n.t("Past two, each shows its share alone and the countdowns move to the tooltip. Past four, the rest are in the menu."))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
     }
 
     private var notificationsPane: some View {
@@ -1560,8 +1474,105 @@ private struct AccentColorSwatch: View {
     }
 }
 
+/// All controls whose effect belongs to the macOS menu bar, kept in one
+/// native Settings section while continuing to bind directly to Preferences.
+struct MenuBarSettingsSection: View {
+    @ObservedObject var preferences: Preferences
+    let choices: [MenuBarChoice]
+
+    var body: some View {
+        Section(L10n.t("Menu Bar")) {
+            // This is the menu bar item's own presence switch. The other
+            // controls remain hidden while there is no item for them to alter,
+            // exactly as they did when they lived in the App section.
+            Picker(L10n.t("App icon"), selection: $preferences.appPresence) {
+                ForEach(AppPresence.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+
+            Text(preferences.appPresence.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if preferences.appPresence == .menuBar {
+                limitRows
+            }
+
+            // The menu and the notch deliberately share this representation;
+            // moving its one control does not split that source of truth.
+            Picker(L10n.t("Reset time"), selection: $preferences.resetTimeFormat) {
+                ForEach(ResetTimeFormat.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+
+            Text(preferences.resetTimeFormat.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Limits in the menu bar: first the master switch, then the providers it
+    /// governs, then the extra weekly ring. Whether a provider is read at all
+    /// remains its separate switch in Accounts.
+    @ViewBuilder
+    private var limitRows: some View {
+        Toggle(L10n.t("Show limit information in menu bar"),
+               isOn: $preferences.showsLimitsInMenuBar)
+        Text(L10n.t("Swaps the icon for each chosen provider's five-hour limit — how much is used and how long until it resets."))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+        if preferences.showsLimitsInMenuBar {
+            ForEach(choices) { choice in
+                Toggle(isOn: Binding(
+                    get: { preferences.isInMenuBar(choice.id) },
+                    set: { preferences.setInMenuBar($0, for: choice.id, among: choices.map(\.id)) }
+                )) {
+                    // The mark and name as the Accounts rows draw them, so a
+                    // provider is recognisably the same one in both places.
+                    HStack(spacing: 10) {
+                        ProviderGlyphView(glyph: choice.glyph, size: 16)
+                            .accessibilityHidden(true)
+                        Text(choice.name)
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help(L10n.t("Shows \(choice.name)'s five-hour limit in the menu bar. Codenotch reads it either way."))
+            }
+
+            Text(choices.isEmpty
+                 ? L10n.t("Nothing Codenotch reads has a five-hour limit to show yet. Claude and Codex do — switch one on in Accounts.")
+                 : L10n.t("Leaving a provider out keeps it off the menu bar only — Codenotch still reads it. With none chosen, the icon comes back."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Said only once it applies: past two the item keeps each share
+            // and drops the countdowns, and past four it stops, because macOS
+            // hides a status item that does not fit rather than squeezing it.
+            if choices.filter({ preferences.isInMenuBar($0.id) }).count > StatusItemSummary.fullEntryLimit {
+                Text(L10n.t("Past two, each shows its share alone and the countdowns move to the tooltip. Past four, the rest are in the menu."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Toggle(L10n.t("Show weekly limit in menu bar"),
+                   isOn: $preferences.showsWeeklyLimitInMenuBar)
+            Text(L10n.t("Adds a compact weekly-usage ring around each chosen provider that publishes it."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 /// A provider as the menu bar rows in Settings list it.
-private struct MenuBarChoice: Identifiable, Equatable {
+struct MenuBarChoice: Identifiable, Equatable {
     let id: String
     let name: String
     let glyph: ProviderGlyph
