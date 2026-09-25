@@ -22,6 +22,17 @@ final class ActivityCoordinator {
         }
     }
 
+    /// Each running monitor's sessions, reduced to whether its provider is
+    /// working. A monitor that is switched off says nothing, which reads as
+    /// unknown rather than as idle.
+    var activityStates: [String: ProviderActivityState] {
+        var states: [String: ProviderActivityState] = [:]
+        for id in activeIDs {
+            if let monitor = monitors[id] { states[id] = ProviderActivityState(sessions: monitor.sessions) }
+        }
+        return states
+    }
+
     func setEnabled(_ enabled: Set<String>) {
         let wanted = enabled.intersection(monitors.keys)
         for id in activeIDs.subtracting(wanted) {

@@ -320,3 +320,106 @@ private final class RelayStubHandler: ChannelInboundHandler {
         }
     }
 }
+
+// MARK: - Requests in flight, as provider activity
+
+@MainActor
+final class OllamaRequestActivityTests: XCTestCase {
+    /// A request counts from the moment it is relayed to its end, thinking or
+    /// not, and each model is dated from its oldest request.
+    func testRequestsAreTrackedPerModelUntilTheyEnd() {
+        let relay = OllamaActivityRelay()
+        let first = UUID(), second = UUID(), cloud = UUID()
+        relay.observeRequest(id: first, model: "llama3.2", now: Date(timeIntervalSince1970: 10))
+        relay.observeRequest(id: second, model: "llama3.2:latest", now: Date(timeIntervalSince1970: 20))
+        relay.observeRequest(id: cloud, model: "gpt-oss:120b-cloud", now: Date(timeIntervalSince1970: 30))
+        XCTAssertEqual(relay.inFlightModels, ["llama3.2:latest": Date(timeIntervalSince1970: 10),
+                                              "gpt-oss:120b-cloud": Date(timeIntervalSince1970: 30)])
+        relay.observeRequest(id: first, model: nil)
+        XCTAssertEqual(relay.inFlightModels["llama3.2:latest"], Date(timeIntervalSince1970: 20))
+        relay.observeRequest(id: second, model: nil)
+        relay.observeRequest(id: second, model: nil)
+        XCTAssertEqual(Set(relay.inFlightModels.keys), ["gpt-oss:120b-cloud"])
+        relay.configure(enabled: false, endpoint: OllamaEndpoint.defaultAddress)
+        XCTAssertTrue(relay.inFlightModels.isEmpty, "switching the relay off forgets what it was carrying")
+    }
+
+    /// Ollama's hosted models run through the same daemon; their tag says so.
+    func testCloudModelsAreOllamasCloudAndTheRestAreLocal() {
+        for name in ["gpt-oss:120b-cloud", "glm-4.6:cloud", "qwen3-coder:480b-CLOUD"] {
+            XCTAssertTrue(OllamaActivityRelay.isCloudModel(name), name)
+        }
+        for name in ["llama3.2:latest", "qwen3:0.6b", "cloudy:latest", "host:443/user/model:latest", "cloud"] {
+            XCTAssertFalse(OllamaActivityRelay.isCloudModel(name), name)
+        }
+        XCTAssertEqual(OllamaActivityRelay.activityStates(inFlight: []),
+                       ["ollama-local": .idle, "ollama": .idle])
+        XCTAssertEqual(OllamaActivityRelay.activityStates(inFlight: ["llama3.2:latest"]),
+                       ["ollama-local": .active, "ollama": .idle])
+        XCTAssertEqual(OllamaActivityRelay.activityStates(inFlight: ["gpt-oss:120b-cloud"]),
+                       ["ollama-local": .idle, "ollama": .active])
+    }
+}
+
+private final class RequestEvidence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String?] = []
+    func record(_ model: String?) { lock.lock(); storage.append(model); lock.unlock() }
+    var events: [String?] { lock.lock(); defer { lock.unlock() }; return storage }
+}
+
+final class OllamaRelayRequestLifecycleTests: XCTestCase {
+    /// An answer-only model never "thinks", and is still work from the request
+    /// to its last byte.
+    func testAGenerationIsReportedFromStartToEndWithoutThinking() async throws {
+        let stream = #"{"model":"llama3.2:1b","response":"4"}"# + "\n" + #"{"done":true}"# + "\n"
+        let stub = try await RelayStub.start(payload: Data(stream.utf8))
+        let requests = RequestEvidence(), thinking = RelayEvidence()
+        let server = OllamaRelayServer(upstream: stub.url, onRequest: { _, model in requests.record(model) }) {
+            _, model, active in thinking.record(model, active)
+        }
+        let port = try await server.start(port: 0)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/generate")!)
+        request.httpMethod = "POST"
+        request.httpBody = Data(#"{"model":"llama3.2:1b","prompt":"public fixture"}"#.utf8)
+        let (data, _) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual(data, Data(stream.utf8), "the bytes pass through untouched")
+        XCTAssertEqual(requests.events, ["llama3.2:1b", nil])
+        XCTAssertFalse(thinking.events.contains { $0.1 }, "never thinking, still working")
+        await server.stop()
+        await stub.stop()
+    }
+
+    /// Listing models is not work.
+    func testBookkeepingRequestsAreNotWork() async throws {
+        let stub = try await RelayStub.start(payload: Data(#"{"models":[]}"#.utf8))
+        let requests = RequestEvidence()
+        let server = OllamaRelayServer(upstream: stub.url, onRequest: { _, model in requests.record(model) }) { _, _, _ in }
+        let port = try await server.start(port: 0)
+        _ = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/api/tags")!)
+        XCTAssertTrue(requests.events.isEmpty)
+        await server.stop()
+        await stub.stop()
+    }
+
+    /// A client that walks away mid-answer ends the work as surely as the
+    /// last byte does.
+    func testCancellationEndsTheRequest() async throws {
+        let stub = try await RelayStub.start(payload: Data((#"{"response":"partial"}"# + "\n").utf8), holdOpen: true)
+        let requests = RequestEvidence()
+        let server = OllamaRelayServer(upstream: stub.url, onRequest: { _, model in requests.record(model) }) { _, _, _ in }
+        let port = try await server.start(port: 0)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/chat")!)
+        request.httpMethod = "POST"
+        request.httpBody = Data(#"{"model":"qwen3"}"#.utf8)
+        let task = URLSession.shared.dataTask(with: request)
+        task.resume()
+        for _ in 0..<100 where requests.events.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(requests.events, ["qwen3"])
+        task.cancel()
+        for _ in 0..<100 where requests.events.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(requests.events, ["qwen3", nil], "reported once, whichever way it ended")
+        await server.stop()
+        await stub.stop()
+    }
+}

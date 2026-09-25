@@ -14,6 +14,9 @@ import AppKit
 /// the menu bar. Then it shows each chosen provider's five-hour window at a
 /// glance — "72% · 2h 18m" beside the provider's mark — and is the icon again
 /// whenever none of them has such a window to show. See `StatusItemSummary`.
+///
+/// While a provider shown there is working, its mark breathes — see
+/// `StatusItemPulse` — and the figures beside it keep still.
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
     private var item: NSStatusItem?
@@ -22,6 +25,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var onRefreshProvider: ((String) -> Void)?
     /// Refetch every provider.
     var onRefreshAll: (() -> Void)?
+    /// The provider ids whose marks are actually on the status item. This is
+    /// the activity board's consumer gate: an owned monitor has no reason to
+    /// poll merely because its account is connected when its mark is not here.
+    var onConsumedProviderIDsChange: ((Set<String>) -> Void)?
     /// Switch limits in the bar on or off — the same Settings preference,
     /// written back through the same place, never a second one kept here. The
     /// controller stores no answer of its own: it asks `limits.isOn`, which is
@@ -69,6 +76,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// notch. Kept separate from usage snapshots: a usage refresh is not work,
     /// and activity never asks a provider to refresh its limits.
     private(set) var activeProviderIDs: Set<String> = []
+    private var consumedProviderIDs: Set<String> = []
+    /// Geometry from the last image render. Ordinary activity changes reuse
+    /// it and update only the layer mask; they do not rebuild identical pixels.
+    private var artworkImageSize: NSSize = .zero
+    private var artworkGlyphFrames: [String: NSRect] = [:]
     /// Pulses the marks of the entries that are working without drawing a
     /// second, independently tinted copy of each mark over AppKit's image.
     private let pulse = StatusItemPulse()
@@ -151,6 +163,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         for (center, token) in observers { center.removeObserver(token) }
         observers = []
         summary = nil
+        artworkImageSize = .zero
+        artworkGlyphFrames = [:]
+        publishConsumedProviderIDs([])
         NSStatusBar.system.removeStatusItem(item)
         self.item = nil
     }
@@ -214,39 +229,83 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         if next.entries.isEmpty {
             pulse.clear()
+            artworkImageSize = .zero
+            artworkGlyphFrames = [:]
+            publishConsumedProviderIDs([])
             item.length = NSStatusItem.squareLength
             button.image = Self.icon()
             button.toolTip = L10n.t("Codenotch")
             button.setAccessibilityLabel(nil)
             return
         }
+        publishConsumedProviderIDs(Set(next.entries.map(\.id)))
         item.length = NSStatusItem.variableLength
         button.imagePosition = .imageOnly
         redrawArtwork()
-        let details = next.entries.map(\.detail).joined(separator: "\n")
-        button.toolTip = details
-        // The image is text VoiceOver cannot read; this says what it shows.
-        button.setAccessibilityLabel(details)
+        updateActivityText()
     }
 
     /// Called by the activity coordinator with provider-specific normalized
     /// sessions. Waiting, success and an open-but-idle process are deliberately
     /// static; only actual work (`busy`) pulses.
     func setActivity(providerID: String, sessions: [AgentSession]) {
-        let isActive = sessions.contains { $0.state == .busy }
-        let changed: Bool
-        if isActive {
-            changed = activeProviderIDs.insert(providerID).inserted
+        setActivity(providerID: providerID,
+                    state: ProviderActivityState(sessions: sessions))
+    }
+
+    /// Replaces the board's complete answer in one publication. The status
+    /// item's active set remains separate from its usage summary, as in #313.
+    func setActivities(_ states: [String: ProviderActivityState]) {
+        let oldVisible = visibleActiveProviderIDs
+        activeProviderIDs = Set(states.compactMap { $0.value == .active ? $0.key : nil })
+        guard visibleActiveProviderIDs != oldVisible else { return }
+        updateActivityPresentation()
+    }
+
+    private func setActivity(providerID: String, state: ProviderActivityState) {
+        let oldVisible = visibleActiveProviderIDs
+        if state == .active {
+            activeProviderIDs.insert(providerID)
         } else {
-            changed = activeProviderIDs.remove(providerID) != nil
+            activeProviderIDs.remove(providerID)
         }
-        guard changed else { return }
-        redrawArtwork()
+        guard visibleActiveProviderIDs != oldVisible else { return }
+        updateActivityPresentation()
     }
 
     private var visibleActiveProviderIDs: Set<String> {
         guard let summary else { return [] }
         return activeProviderIDs.intersection(summary.entries.map(\.id))
+    }
+
+    private func publishConsumedProviderIDs(_ ids: Set<String>) {
+        guard ids != consumedProviderIDs else { return }
+        consumedProviderIDs = ids
+        onConsumedProviderIDsChange?(ids)
+    }
+
+    /// Activity changes touch accessibility text and either the cached mask or,
+    /// only for Reduce Motion's still badge, the image pixels themselves.
+    private func updateActivityPresentation() {
+        guard summary?.entries.isEmpty == false else { return }
+        updateActivityText()
+        if reducesMotion {
+            redrawArtwork()
+        } else if let button = item?.button {
+            pulse.update(view: button, imageSize: artworkImageSize,
+                         glyphs: artworkGlyphFrames, working: visibleActiveProviderIDs)
+        }
+    }
+
+    private func updateActivityText() {
+        guard let button = item?.button, let summary, !summary.entries.isEmpty else { return }
+        let working = visibleActiveProviderIDs
+        let details = summary.entries.map { entry in
+            entry.detail + (working.contains(entry.id) ? " · " + L10n.t("Working") : "")
+        }.joined(separator: "\n")
+        button.toolTip = details
+        // The image and its pulse are not readable by VoiceOver; this is.
+        button.setAccessibilityLabel(details)
     }
 
     private func redrawArtwork() {
@@ -257,7 +316,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             activityBadgeProviderIDs: reducesMotion ? working : []
         )
         button.image = artwork.image()
-        let glyphs = Dictionary(uniqueKeysWithValues: summary.entries.compactMap { entry in
+        artworkImageSize = artwork.size
+        artworkGlyphFrames = Dictionary(uniqueKeysWithValues: summary.entries.compactMap { entry in
             artwork.glyphFrame(for: entry.id).map { (entry.id, $0) }
         })
         if reducesMotion {
@@ -266,7 +326,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             // visible as a still badge instead.
             pulse.clear()
         } else {
-            pulse.update(view: button, imageSize: artwork.size, glyphs: glyphs, working: working)
+            pulse.update(view: button, imageSize: artworkImageSize,
+                         glyphs: artworkGlyphFrames, working: working)
         }
     }
 

@@ -10,6 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var phoneLinkPairing: PhoneLinkPairing?
     var phoneLinkRegistry: PhoneLinkRegistry?
     private var activityCoordinator: ActivityCoordinator?
+    /// Every provider's activity, normalised, from every source that can say
+    /// — the notch's monitors, the Ollama relay, LM Studio, and the sources that
+    /// exist only for the menu bar. See `ProviderActivityBoard`.
+    private var activityBoard: ProviderActivityBoard?
     private var ollamaRelay: OllamaActivityRelay?
     private var lmstudioMetrics: LMStudioMetrics?
     private var preferences: Preferences?
@@ -91,6 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Preferences.migrateFromPreviousName()
         let preferences = Preferences()
         self.preferences = preferences
+        let activityBoard = ProviderActivityBoard()
+        self.activityBoard = activityBoard
 
         // One notch per display: the fleet owns a controller for each screen
         // the scope asks for and fans every reading out to all of them. The
@@ -235,6 +241,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 .store(in: &cancellables)
 
+            // Requests the relay is carrying, as activity for the local
+            // runtime and for Ollama's cloud — only while it is up to see them.
+            relay.$ready.combineLatest(relay.$inFlightModels)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak activityBoard] ready, models in
+                    activityBoard?.report(ready ? OllamaActivityRelay.activityStates(inFlight: models.keys) : [:],
+                                          from: "ollama-relay")
+                }
+                .store(in: &cancellables)
+
             // LM Studio needs no relay: its own socket says what each model is
             // doing and its own log says what every request cost. Monitoring
             // follows the provider's switch, and the address follows Settings.
@@ -267,6 +283,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lmstudio.$ledger
                 .receive(on: RunLoop.main)
                 .sink { [weak fleet] in fleet?.setLedger($0) }
+                .store(in: &cancellables)
+            // A model reading a prompt or generating, as LM Studio's socket
+            // says — while the socket is there to say anything.
+            let lmstudioID = LMStudioMetrics.providerID
+            lmstudio.$linked.combineLatest(lmstudio.$activities)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak activityBoard] linked, activities in
+                    activityBoard?.report(linked ? [lmstudioID: activities.isEmpty ? .idle : .active] : [:],
+                                          from: "lmstudio")
+                }
                 .store(in: &cancellables)
 
             let dir: URL
@@ -400,6 +426,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.statusItem = statusItem
             statusItem.onRefreshProvider = { [weak store] id in store?.refresh(providerID: id) }
             statusItem.onRefreshAll = { [weak store] in store?.refreshNow() }
+            statusItem.onConsumedProviderIDsChange = { [weak activityBoard] ids in
+                activityBoard?.setConsumed(ids)
+            }
             // The menu's tick writes to the same preference Settings writes to,
             // and reads nothing back of its own: the sink below carries the new
             // value to the item, and Settings — a published property away —
@@ -443,6 +472,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .removeDuplicates()
                 .receive(on: DispatchQueue.main)
                 .sink { [weak statusItem] in statusItem?.showsWeeklyLimit = $0 }
+                .store(in: &cancellables)
+
+            // Whether each provider is working reaches the item as soon as a
+            // source says so — never through a usage fetch, and never by
+            // asking for one. Dispatch, not the run loop: it also delivers
+            // while AppKit is tracking the open menu.
+            activityBoard.$states
+                .removeDuplicates()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak statusItem] in statusItem?.setActivities($0) }
                 .store(in: &cancellables)
 
             preferences.$notchVisibility
@@ -768,18 +807,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let activity = ActivityCoordinator(monitors: monitors) { [weak self, weak fleet] id, sessions in
             guard let fleet else { return }
             fleet.setSessions(providerID: id, sessions: sessions)
-            self?.statusItem?.setActivity(providerID: id, sessions: sessions)
             self?.announceCompletions(sessions: fleet.sessions)
+            // The same sessions, as the menu bar reads them. Read back from the
+            // coordinator so a monitor that was just switched off drops out.
+            if let states = self?.activityCoordinator?.activityStates {
+                self?.activityBoard?.report(states, from: "agents")
+            }
         }
         self.activityCoordinator = activity
+        // Providers the notch has no monitor for, watched only to say whether
+        // they are working. Owned by the board, so they run only while one of
+        // their marks is actually on the status item; merely connecting an
+        // account does not add a poller. Nothing they find reaches the notch,
+        // its chimes, or the usage schedule.
+        activityBoard.add(MonitorActivitySource(providerID: "copilot", monitor: CopilotActivityMonitor()),
+                          as: "copilot")
+        activityBoard.add(OpenCodeActivitySource(), as: "opencode")
         let monitorIDs = Set(monitors.keys)
         activity.setEnabled(Set(monitorIDs.filter { preferences.isConnected($0) }))
         preferences.$connectedProviders
             .removeDuplicates()
             .receive(on: RunLoop.main)
-            .sink { [weak activity, weak preferences] _ in
+            .sink { [weak activity, weak activityBoard, weak preferences] _ in
                 guard let preferences else { return }
                 activity?.setEnabled(Set(monitorIDs.filter { preferences.isConnected($0) }))
+                if let states = activity?.activityStates {
+                    activityBoard?.report(states, from: "agents")
+                }
             }
             .store(in: &cancellables)
         store?.isBusy = { [weak self, weak activity] in
@@ -997,6 +1051,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tokenRefresher?.stop()
         store?.stop()
         activityCoordinator?.stop()
+        activityBoard?.stop()
         notchFleet?.stop()
         Task { await phoneLinkServer?.stop() }
     }

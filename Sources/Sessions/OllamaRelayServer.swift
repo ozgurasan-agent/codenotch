@@ -9,21 +9,34 @@ import NIOPosix
 // callbacks are confined to the single NIO event loop.
 final class OllamaRelayServer: @unchecked Sendable {
     typealias Observer = (UUID, String, Bool) -> Void
+    /// A generation request starting (with its model) or ending (nil), from
+    /// the moment it is forwarded until its last byte, failure or cancellation.
+    typealias RequestObserver = (UUID, String?) -> Void
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     private var listener: Channel?
     // Accessed only on the group's single event loop.
     private var clients: [ObjectIdentifier: Channel] = [:]
     private let upstream: URL
     private let observe: Observer
+    private let onRequest: RequestObserver
     private let onPerformance: (String, LocalModelPerformance) -> Void
     private var stopped = false
 
     init(upstream: URL,
          onPerformance: @escaping (String, LocalModelPerformance) -> Void = { _, _ in },
+         onRequest: @escaping RequestObserver = { _, _ in },
          observe: @escaping Observer) {
         self.upstream = upstream
         self.onPerformance = onPerformance
+        self.onRequest = onRequest
         self.observe = observe
+    }
+
+    /// The paths that run a model. Anything else — listing, pulling, `ps` —
+    /// is bookkeeping, not work.
+    static func isGeneration(path: String) -> Bool {
+        ["/api/chat", "/api/generate", "/v1/chat/completions", "/v1/completions", "/v1/responses"]
+            .contains(path)
     }
 
     func start(port: Int = 11435) async throws -> Int {
@@ -40,7 +53,8 @@ final class OllamaRelayServer: @unchecked Sendable {
                                                                      withErrorHandling: true)
                     .flatMap {
                         channel.pipeline.addHandler(RelayRequestHandler(upstream: endpoint,
-                            observe: self.observe, onPerformance: self.onPerformance))
+                            observe: self.observe, onRequest: self.onRequest,
+                            onPerformance: self.onPerformance))
                     }
             }
             .bind(host: "127.0.0.1", port: port).get()
@@ -92,6 +106,7 @@ private final class RelayRequestHandler: ChannelInboundHandler {
     typealias InboundIn = HTTPServerRequestPart
     private let upstream: URL
     private let observe: OllamaRelayServer.Observer
+    private let onRequest: OllamaRelayServer.RequestObserver
     private let onPerformance: (String, LocalModelPerformance) -> Void
     private let id = UUID()
     private var head: HTTPRequestHead?
@@ -101,12 +116,23 @@ private final class RelayRequestHandler: ChannelInboundHandler {
     private var downstream: Channel?
     private var responded = false
     private var parser: OllamaThinkingStream?
+    /// Set while a generation request is being relayed, so its end is
+    /// reported exactly once whichever way it ends.
+    private var generating = false
 
     init(upstream: URL, observe: @escaping OllamaRelayServer.Observer,
+         onRequest: @escaping OllamaRelayServer.RequestObserver,
          onPerformance: @escaping (String, LocalModelPerformance) -> Void) {
         self.upstream = upstream
         self.observe = observe
+        self.onRequest = onRequest
         self.onPerformance = onPerformance
+    }
+
+    private func endGeneration() {
+        guard generating else { return }
+        generating = false
+        onRequest(id, nil)
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -143,6 +169,10 @@ private final class RelayRequestHandler: ChannelInboundHandler {
             downstream = context.channel
             let path = String(head.uri.split(separator: "?", maxSplits: 1).first ?? "")
             parser = OllamaThinkingStream(path: path, body: body)
+            if OllamaRelayServer.isGeneration(path: path), let model = parser?.model, !model.isEmpty {
+                generating = true
+                onRequest(id, model)
+            }
             connect(head: head, channel: context.channel)
         }
     }
@@ -206,6 +236,7 @@ private final class RelayRequestHandler: ChannelInboundHandler {
             parser?.finish()
             publishPerformance()
             observe(id, "", false)
+            endGeneration()
             parser = nil
             channel.writeAndFlush(HTTPServerResponsePart.end(nil)).whenComplete { _ in
                 channel.close(promise: nil)
@@ -228,6 +259,7 @@ private final class RelayRequestHandler: ChannelInboundHandler {
 
     fileprivate func upstreamFailed() {
         observe(id, "", false)
+        endGeneration()
         if let channel = downstream {
             if responded { channel.close(promise: nil) }
             else { fail(channel, status: .badGateway) }
@@ -238,6 +270,7 @@ private final class RelayRequestHandler: ChannelInboundHandler {
         forwarding = true
         body.removeAll()
         observe(id, "", false)
+        endGeneration()
         channel.write(HTTPServerResponsePart.head(HTTPResponseHead(
             version: .http1_1, status: status,
             headers: ["content-length": "0", "connection": "close"])), promise: nil)
@@ -246,6 +279,7 @@ private final class RelayRequestHandler: ChannelInboundHandler {
 
     func channelInactive(context: ChannelHandlerContext) {
         observe(id, "", false)
+        endGeneration()
         upstreamChannel?.close(promise: nil)
         upstreamChannel = nil
         downstream = nil
