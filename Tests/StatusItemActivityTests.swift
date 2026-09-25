@@ -127,12 +127,12 @@ final class StatusItemActivityTests: XCTestCase {
                 }
                 return snapshot
             }
-        controller.reducesMotion = false
         controller.snapshots = fresh
         controller.limits = MenuBarLimits(isOn: true, chosen: ["claude", "codex"])
         var consumed: [Set<String>] = []
         controller.onConsumedProviderIDsChange = { consumed.append($0) }
         controller.show()
+        controller.reducesMotion = false
         defer { controller.hide() }
         let children = Mirror(reflecting: controller).children
         let item = try XCTUnwrap(children.first { $0.label == "item" }?.value as? NSStatusItem)
