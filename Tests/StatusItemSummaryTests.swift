@@ -494,6 +494,89 @@ final class StatusItemSummaryTests: XCTestCase {
         }
     }
 
+    /// Two readings, which is where packing the figures could go wrong in a way
+    /// one reading cannot show: the rule between them is drawn on a whole point,
+    /// and rounding the cursor there would carry the width of whatever was
+    /// printed before it into the item's own width. Two providers at "0%" came
+    /// out a point wider than two at "100%".
+    func testTheItemKeepsOneWidthWithTwoReadings() {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        func width(_ first: (Double, TimeInterval), _ second: (Double, TimeInterval)) -> CGFloat {
+            StatusItemArtwork(summary: summary([claude(first.0, resetIn: first.1),
+                                                codex(second.0, resetIn: second.1)]),
+                              font: font, height: 22).size.width
+        }
+        let reference = width((0.72, 2 * hour + 18 * minute), (0.41, 4 * hour + 5 * minute))
+        for first in [(0.0, 4 * hour + 58 * minute), (1.0, 4 * hour + 58 * minute),
+                      (0.72, 47 * minute), (1.0, 30)] as [(Double, TimeInterval)] {
+            for second in [(0.0, 3 * hour), (0.36, 2 * hour + 3 * minute),
+                           (1.0, 8 * minute), (0.41, 30)] as [(Double, TimeInterval)] {
+                XCTAssertEqual(width(first, second), reference, "\(first) beside \(second)")
+            }
+        }
+    }
+
+    /// A reading is one thing: the mark, then its figures, with only the gap
+    /// the layout puts between them. The room a short figure does not use
+    /// belongs at the end of the item, where it borders the next status item —
+    /// held in front of the figure instead, it left "0%" floating two digits
+    /// clear of the very icon it describes.
+    func testTheFiguresSitAgainstTheirMarkWhateverTheyRead() throws {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        func artwork(_ used: Double) -> StatusItemArtwork {
+            StatusItemArtwork(summary: summary([claude(used, resetIn: 2 * hour + 18 * minute)]),
+                              font: font, height: 22)
+        }
+        let mark = try XCTUnwrap(artwork(0.72).glyphFrame(for: "claude"))
+        func figures(_ used: Double) throws -> (first: CGFloat, last: CGFloat) {
+            try XCTUnwrap(inkedSpan(artwork(used).image(), from: mark.maxX + 1))
+        }
+        // Where the percentage starts is where the mark ends, plus the gap —
+        // the same column whether it reads "0%" or "100%".
+        let reference = try figures(0.72).first
+        for used in [0.0, 0.07, 0.999, 1.0] {
+            XCTAssertEqual(try figures(used).first, reference, accuracy: 0.5,
+                           "\(used) should start where every other reading does")
+        }
+        // And the room it saved is at the end: "0%" is two digits shorter than
+        // "100%", so its reading stops short of the item's own width, which
+        // has not changed.
+        XCTAssertLessThan(try figures(0.0).last, try figures(1.0).last)
+        XCTAssertLessThan(try figures(0.0).last, artwork(0.0).size.width)
+        XCTAssertEqual(artwork(0.0).size.width, artwork(1.0).size.width)
+    }
+
+    /// The leftmost and rightmost columns the artwork puts ink in, in points,
+    /// ignoring everything left of `from`.
+    private func inkedSpan(_ image: NSImage, from x0: CGFloat) -> (first: CGFloat, last: CGFloat)? {
+        let scale: CGFloat = 2
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                   pixelsWide: Int(image.size.width * scale),
+                                   pixelsHigh: Int(image.size.height * scale),
+                                   bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false,
+                                   colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.size = image.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: image.size))
+        NSGraphicsContext.restoreGraphicsState()
+        var first: CGFloat?
+        var last: CGFloat?
+        for x in 0..<rep.pixelsWide {
+            let column = CGFloat(x) / scale
+            guard column >= x0 else { continue }
+            for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 {
+                if first == nil { first = column }
+                last = column
+                break
+            }
+        }
+        guard let first, let last else { return nil }
+        return (first, last)
+    }
+
     /// A template, as the icon it stands in for is, so macOS tints it for
     /// light, dark and wallpaper-tinted menu bars alike.
     func testTheArtworkIsATemplateTheHeightOfTheBar() {

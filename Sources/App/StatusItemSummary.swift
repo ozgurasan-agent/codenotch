@@ -207,10 +207,14 @@ struct StatusItemArtwork {
     private var ruleAlpha: CGFloat { 0.35 }
 
     /// The widest either figure gets in the ordinary run of a window, measured
-    /// in the current language. Each is given at least this much room, so the
-    /// item keeps one width from the start of a window to its reset — the
-    /// items to its left would otherwise shuffle every time "10%" became "9%"
-    /// or "1h 00m" became "59m".
+    /// in the current language. The item holds this much room for each, so it
+    /// keeps one width from the start of a window to its reset — the items to
+    /// its left would otherwise shuffle every time "10%" became "9%" or
+    /// "1h 00m" became "59m".
+    ///
+    /// The room a figure does not use is held at the end of the item rather
+    /// than in front of the figure, so the figures themselves stay packed
+    /// against their marks. See `layout`.
     ///
     /// Measured across every shape the figure can take, rather than sampled at
     /// one reading: a reservation the widest shape overruns is no reservation
@@ -272,6 +276,9 @@ struct StatusItemArtwork {
         var marks: [(Mark, CGFloat)] = []
         var glyphFrames: [String: NSRect] = [:]
         var x: CGFloat = 0
+        // Room reserved but not used by the figures drawn, collected as they go
+        // and added once at the end — see below.
+        var slack: CGFloat = 0
         func text(_ string: String, alpha: CGFloat) {
             marks.append((.text(string, NSPoint(x: x, y: baseline)), alpha))
             x += width(string)
@@ -280,10 +287,16 @@ struct StatusItemArtwork {
             if index > 0 {
                 // "72% · 2h 18m | 41% · 4h 05m": without the rule, two readings
                 // run together into one line of figures. As tall as the marks,
-                // and on whole points so it stays one crisp line.
-                x = (x + entryGap).rounded()
-                marks.append((.rule(NSRect(x: x, y: middle - glyphSize / 2, width: 1, height: glyphSize)),
-                              ruleAlpha))
+                // and drawn on a whole point so it stays one crisp line.
+                //
+                // The cursor is left alone rather than rounded with it. Now
+                // that the figures are packed rather than padded, rounding here
+                // would round a position that depends on how wide they happen
+                // to read, and the item's own width with it — a point wider
+                // with two providers at "0%" than at "100%".
+                x += entryGap
+                marks.append((.rule(NSRect(x: x.rounded(), y: middle - glyphSize / 2,
+                                           width: 1, height: glyphSize)), ruleAlpha))
                 x += 1 + entryGap
             }
             let alpha: CGFloat = entry.isStale ? 0.5 : 1
@@ -302,18 +315,22 @@ struct StatusItemArtwork {
                 text(StatusItemSummary.Entry.unknown, alpha: alpha)
                 continue
             }
-            // Right-aligned, so the "%" stays put and the figure grows leftward.
-            let percentWidth = width(entry.percent)
-            x += max(0, percentRoom - percentWidth)
+            // Each figure at its own width, with the room it did not use put
+            // aside for the end of the item. The reservation is what keeps the
+            // item one width; held here instead, in front of the figure, it
+            // left "0%" floating two digits clear of the mark it belongs to,
+            // and a reading read as two loose halves rather than one.
             text(entry.percent, alpha: alpha)
+            slack += max(0, percentRoom - width(entry.percent))
             if !summary.isCompact {
                 text(separator, alpha: alpha)
-                let start = x
                 text(entry.countdown, alpha: alpha)
-                x = max(x, start + countdownRoom)
+                slack += max(0, countdownRoom - width(entry.countdown))
             }
         }
-        return (x.rounded(.up), marks, glyphFrames)
+        // The whole reservation, wherever the figures ended: the item's width is
+        // what must not move, not where its slack sits.
+        return ((x + slack).rounded(.up), marks, glyphFrames)
     }
 
     /// The badge sits in the lower trailing corner, where macOS icon badges
