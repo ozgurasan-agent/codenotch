@@ -211,10 +211,35 @@ struct StatusItemArtwork {
     /// item keeps one width from the start of a window to its reset — the
     /// items to its left would otherwise shuffle every time "10%" became "9%"
     /// or "1h 00m" became "59m".
-    private var percentRoom: CGFloat { width("00%") }
-    private var countdownRoom: CGFloat {
+    ///
+    /// Measured across every shape the figure can take, rather than sampled at
+    /// one reading: a reservation the widest shape overruns is no reservation
+    /// at all, because the item grows past it on the reading that matters most.
+    private var percentRoom: CGFloat { Self.percentShapes.map(width).max() ?? 0 }
+    private var countdownRoom: CGFloat { countdownShapes.map(width).max() ?? 0 }
+
+    /// Every percentage the bar prints, at its widest. "100%" is the one the
+    /// old "00%" reservation was short of, by a digit — and a window reaching
+    /// its limit is the moment the bar least ought to move. "<1%" and the dash
+    /// are measured beside it because neither is a plain two-digit figure.
+    private static let percentShapes = ["100%", "<1%", StatusItemSummary.Entry.unknown]
+
+    /// A five-hour countdown in each shape `ResetCopy` gives it — hours and
+    /// minutes, minutes alone, the last minute — and the dash for no reading.
+    ///
+    /// The hours shape is the widest in every language shipped today, so this
+    /// measures the same room the single sample did. It is measured rather
+    /// than assumed because that is a fact about those translations, not about
+    /// the format: Korean already renders the last minute as "1분 미만", wider
+    /// than its own "59분", and one more language is all it would take for the
+    /// minutes shape to overrun a reservation sized from the hours one.
+    private var countdownShapes: [String] {
         let now = Date(timeIntervalSinceReferenceDate: 0)
-        return width(ResetCopy.countdown(to: now.addingTimeInterval(5 * 3600 - 30), now: now) ?? "")
+        func countdown(_ left: TimeInterval) -> String {
+            ResetCopy.countdown(to: now.addingTimeInterval(left), now: now) ?? ""
+        }
+        return [countdown(5 * 3600 - 30), countdown(59 * 60), countdown(30),
+                StatusItemSummary.Entry.unknown]
     }
 
     var size: NSSize { NSSize(width: layout().width, height: height) }
@@ -239,6 +264,11 @@ struct StatusItemArtwork {
         // measures digits by; the marks are centred on the same line.
         let baseline = ((height - font.capHeight) / 2 * 2).rounded() / 2
         let middle = baseline + font.capHeight / 2
+        // Once for the whole item: every entry reserves the same room, and each
+        // reservation measures a handful of strings. A compact bar prints no
+        // countdown at all, so it does not pay for measuring one.
+        let percentRoom = self.percentRoom
+        let countdownRoom = summary.isCompact ? 0 : self.countdownRoom
         var marks: [(Mark, CGFloat)] = []
         var glyphFrames: [String: NSRect] = [:]
         var x: CGFloat = 0

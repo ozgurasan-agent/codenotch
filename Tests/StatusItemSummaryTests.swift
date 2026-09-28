@@ -456,10 +456,42 @@ final class StatusItemSummaryTests: XCTestCase {
         let reference = width(0.72, 2 * hour + 18 * minute)
         for (used, resetIn) in [(0.07, 2 * hour + 18 * minute), (0.0, 4 * hour + 59 * minute),
                                 (0.003, 3 * hour), (0.72, 47 * minute), (0.72, 8 * minute),
-                                (0.72, 30), (0.72, nil)] as [(Double, TimeInterval?)] {
+                                (0.72, 30), (0.72, nil),
+                                // A window at its limit: three digits where the
+                                // reservation once allowed two, so the item grew
+                                // by one and shuffled the bar at exactly the
+                                // moment the reading mattered.
+                                (1.0, 2 * hour + 18 * minute), (1.0, 47 * minute),
+                                (1.0, 30), (1.0, nil)] as [(Double, TimeInterval?)] {
             XCTAssertEqual(width(used, resetIn), reference, "\(used) with \(String(describing: resetIn))s left")
         }
         XCTAssertLessThan(width(0.72, nil), 150, "one reading should stay compact")
+    }
+
+    /// The same invariant in every language the app ships, because the room is
+    /// measured in the language on screen: Korean renders the last minute as
+    /// "1분 미만" and its hours as "4시간 59분", and only one of those can be
+    /// the widest. A reservation sized from the wrong one lets the item grow.
+    func testTheItemKeepsOneWidthInEveryLanguage() {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        let readings: [(Double, TimeInterval?)] = [(0.0, 4 * hour + 59 * minute),
+                                                   (0.003, 3 * hour), (0.72, 47 * minute),
+                                                   (0.72, 8 * minute), (0.72, 30),
+                                                   (1.0, 2 * hour), (1.0, 30), (0.72, nil)]
+        defer { L10n.testLocale = nil }
+        for language in AppLanguage.allCases {
+            guard let locale = language.locale else { continue }
+            L10n.testLocale = locale
+            func width(_ used: Double, _ resetIn: TimeInterval?) -> CGFloat {
+                StatusItemArtwork(summary: summary([claude(used, resetIn: resetIn)]),
+                                  font: font, height: 22).size.width
+            }
+            let reference = width(0.72, 2 * hour + 18 * minute)
+            for (used, resetIn) in readings {
+                XCTAssertEqual(width(used, resetIn), reference,
+                               "\(locale.identifier): \(used) with \(String(describing: resetIn))s left")
+            }
+        }
     }
 
     /// A template, as the icon it stands in for is, so macOS tints it for
