@@ -86,13 +86,20 @@ enum ResetCopy {
     /// Truncated where `text` rounds. This one is read against a clock, so it
     /// may never claim more time than there is: "<1m" is always under a
     /// minute, and "1h 00m" is gone the moment the hour is.
+    /// `alwaysHours` keeps the hours in even when there are none — "0h 47m"
+    /// rather than "47m". Prose drops them, because "47m" is how a sentence
+    /// says it; the menu bar keeps them, because there the shape is the width,
+    /// and a countdown that loses half its characters an hour before its reset
+    /// either shuffles every item to its left or leaves a hole where they were.
+    /// It costs no new copy: it is the same "%lldh %@m" the hours already use.
     static func countdown(to resetsAt: Date, now: Date = Date(),
-                          locale: Locale = L10n.locale) -> String? {
+                          locale: Locale = L10n.locale,
+                          alwaysHours: Bool = false) -> String? {
         let seconds = resetsAt.timeIntervalSince(now)
         guard seconds > 0 else { return nil }
         let minutes = Int(seconds / 60)
         if minutes < 1 { return L10n.t("<1m", locale: locale) }
-        if minutes < 60 { return L10n.t("\(minutes)m", locale: locale) }
+        if minutes < 60, !alwaysHours { return L10n.t("\(minutes)m", locale: locale) }
         // Two digits, so "2h 05m" is as wide as "2h 50m" and whatever sits
         // beside it in the menu bar does not shuffle as the minutes tick over.
         let padded = String(format: "%02d", minutes % 60)

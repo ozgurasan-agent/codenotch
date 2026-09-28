@@ -318,7 +318,14 @@ final class StatusItemSummaryTests: XCTestCase {
     }
 
     func testTheCountdownRunsDownToUnderAMinute() throws {
-        XCTAssertEqual(try XCTUnwrap(summary([claude(0.66, resetIn: 47 * minute + 50)]).entries.first).countdown, "47m")
+        // The bar keeps the hours in, at "0h 47m", so the figure is the same
+        // width an hour before a reset as five hours before it. The sentence
+        // in the tooltip drops them, because that is how a sentence says it.
+        let underAnHour = try XCTUnwrap(summary([claude(0.66, resetIn: 47 * minute + 50)]).entries.first)
+        XCTAssertEqual(underAnHour.countdown, "0h 47m")
+        XCTAssertTrue(underAnHour.detail.contains("47m"))
+        XCTAssertFalse(underAnHour.detail.contains("0h 47m"))
+        // The last minute is the one shape that has no hours to keep.
         XCTAssertEqual(try XCTUnwrap(summary([claude(0.93, resetIn: 42)]).entries.first).countdown, "<1m")
     }
 
@@ -457,12 +464,10 @@ final class StatusItemSummaryTests: XCTestCase {
         for (used, resetIn) in [(0.07, 2 * hour + 18 * minute), (0.0, 4 * hour + 59 * minute),
                                 (0.003, 3 * hour), (0.72, 47 * minute), (0.72, 8 * minute),
                                 (0.72, 30), (0.72, nil),
-                                // A window at its limit: three digits where the
-                                // reservation once allowed two, so the item grew
-                                // by one and shuffled the bar at exactly the
-                                // moment the reading mattered.
-                                (1.0, 2 * hour + 18 * minute), (1.0, 47 * minute),
-                                (1.0, 30), (1.0, nil)] as [(Double, TimeInterval?)] {
+                                // Under a tenth, where the figure is a digit
+                                // short of the room kept for it.
+                                (0.04, 2 * hour + 18 * minute), (0.04, 47 * minute),
+                                (0.04, 30)] as [(Double, TimeInterval?)] {
             XCTAssertEqual(width(used, resetIn), reference, "\(used) with \(String(describing: resetIn))s left")
         }
         XCTAssertLessThan(width(0.72, nil), 150, "one reading should stay compact")
@@ -477,7 +482,7 @@ final class StatusItemSummaryTests: XCTestCase {
         let readings: [(Double, TimeInterval?)] = [(0.0, 4 * hour + 59 * minute),
                                                    (0.003, 3 * hour), (0.72, 47 * minute),
                                                    (0.72, 8 * minute), (0.72, 30),
-                                                   (1.0, 2 * hour), (1.0, 30), (0.72, nil)]
+                                                   (0.04, 2 * hour), (0.04, 30), (0.72, nil)]
         defer { L10n.testLocale = nil }
         for language in AppLanguage.allCases {
             guard let locale = language.locale else { continue }
@@ -494,6 +499,29 @@ final class StatusItemSummaryTests: XCTestCase {
         }
     }
 
+    /// The one reading the reservation does not cover, and exactly what it costs.
+    ///
+    /// A window reads "100%" only at exactly 100 — `Percent.whole` holds 99.6
+    /// at "99" — and a window that is full stays full until it resets. So the
+    /// item steps out by one digit, once, at the limit, and holds there; it
+    /// never steps back and forth. Reserving that fourth digit permanently
+    /// would have cost a digit of empty space on every other reading the bar
+    /// ever shows, which is most of every window.
+    func testAFullWindowStepsTheItemOutOneDigitAndHolds() {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        func width(_ used: Double) -> CGFloat {
+            StatusItemArtwork(summary: summary([claude(used, resetIn: 2 * hour + 18 * minute)]),
+                              font: font, height: 22).size.width
+        }
+        let ordinary = width(0.42)
+        for used in [0.0, 0.004, 0.04, 0.5, 0.99, 0.996] {
+            XCTAssertEqual(width(used), ordinary, "\(used) is an ordinary reading")
+        }
+        let digit = ("0" as NSString).size(withAttributes: [.font: font]).width
+        XCTAssertEqual(width(1.0), ordinary + digit, accuracy: 1,
+                       "a full window is one digit wider, and no more")
+    }
+
     /// Two readings, which is where packing the figures could go wrong in a way
     /// one reading cannot show: the rule between them is drawn on a whole point,
     /// and rounding the cursor there would carry the width of whatever was
@@ -507,10 +535,10 @@ final class StatusItemSummaryTests: XCTestCase {
                               font: font, height: 22).size.width
         }
         let reference = width((0.72, 2 * hour + 18 * minute), (0.41, 4 * hour + 5 * minute))
-        for first in [(0.0, 4 * hour + 58 * minute), (1.0, 4 * hour + 58 * minute),
-                      (0.72, 47 * minute), (1.0, 30)] as [(Double, TimeInterval)] {
+        for first in [(0.0, 4 * hour + 58 * minute), (0.99, 4 * hour + 58 * minute),
+                      (0.72, 47 * minute), (0.04, 30)] as [(Double, TimeInterval)] {
             for second in [(0.0, 3 * hour), (0.36, 2 * hour + 3 * minute),
-                           (1.0, 8 * minute), (0.41, 30)] as [(Double, TimeInterval)] {
+                           (0.99, 8 * minute), (0.41, 30)] as [(Double, TimeInterval)] {
                 XCTAssertEqual(width(first, second), reference, "\(first) beside \(second)")
             }
         }
@@ -534,16 +562,16 @@ final class StatusItemSummaryTests: XCTestCase {
         // Where the percentage starts is where the mark ends, plus the gap —
         // the same column whether it reads "0%" or "100%".
         let reference = try figures(0.72).first
-        for used in [0.0, 0.07, 0.999, 1.0] {
+        for used in [0.0, 0.07, 0.999, 0.42] {
             XCTAssertEqual(try figures(used).first, reference, accuracy: 0.5,
                            "\(used) should start where every other reading does")
         }
-        // And the room it saved is at the end: "0%" is two digits shorter than
-        // "100%", so its reading stops short of the item's own width, which
-        // has not changed.
-        XCTAssertLessThan(try figures(0.0).last, try figures(1.0).last)
+        // And the room it saved is at the end: "0%" is a digit shorter than
+        // "99%", so its reading stops short of the item's own width, which has
+        // not changed.
+        XCTAssertLessThan(try figures(0.0).last, try figures(0.99).last)
         XCTAssertLessThan(try figures(0.0).last, artwork(0.0).size.width)
-        XCTAssertEqual(artwork(0.0).size.width, artwork(1.0).size.width)
+        XCTAssertEqual(artwork(0.0).size.width, artwork(0.99).size.width)
     }
 
     /// The leftmost and rightmost columns the artwork puts ink in, in points,

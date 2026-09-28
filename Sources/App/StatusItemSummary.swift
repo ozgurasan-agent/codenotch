@@ -100,7 +100,13 @@ struct StatusItemSummary: Equatable {
         if !isOver, let fraction = window?.usedFraction, fraction.isFinite {
             percent = Percent.whole(for: fraction) + "%"
         }
+        // Two shapes of the same instant, from the same `now`, so they cannot
+        // disagree by a minute: the bar keeps its hours so its width never
+        // depends on how much time is left, the detail line drops them because
+        // it is a sentence.
         let countdown = window?.resetsAt.flatMap { ResetCopy.countdown(to: $0, now: now) }
+        let barCountdown = window?.resetsAt
+            .flatMap { ResetCopy.countdown(to: $0, now: now, alwaysHours: true) }
         let label = sharesMark
             ? ClaudeProfile.slug(fromProviderID: snapshot.id) ?? CodexProfile.slug(fromProviderID: snapshot.id)
             : nil
@@ -124,7 +130,7 @@ struct StatusItemSummary: Equatable {
             glyph: snapshot.glyph,
             label: label,
             percent: percent,
-            countdown: countdown ?? Entry.unknown,
+            countdown: barCountdown ?? Entry.unknown,
             isStale: snapshot.status.isStale
                 && (percent != Entry.unknown || weeklyFraction != nil),
             weeklyFraction: weeklyFraction,
@@ -222,27 +228,34 @@ struct StatusItemArtwork {
     private var percentRoom: CGFloat { Self.percentShapes.map(width).max() ?? 0 }
     private var countdownRoom: CGFloat { countdownShapes.map(width).max() ?? 0 }
 
-    /// Every percentage the bar prints, at its widest. "100%" is the one the
-    /// old "00%" reservation was short of, by a digit — and a window reaching
-    /// its limit is the moment the bar least ought to move. "<1%" and the dash
-    /// are measured beside it because neither is a plain two-digit figure.
-    private static let percentShapes = ["100%", "<1%", StatusItemSummary.Entry.unknown]
-
-    /// A five-hour countdown in each shape `ResetCopy` gives it — hours and
-    /// minutes, minutes alone, the last minute — and the dash for no reading.
+    /// Every percentage the bar prints in the ordinary run of a window, at its
+    /// widest: two figures, the "<1%" a barely-touched window reads, and the
+    /// dash for no reading.
     ///
-    /// The hours shape is the widest in every language shipped today, so this
-    /// measures the same room the single sample did. It is measured rather
-    /// than assumed because that is a fact about those translations, not about
-    /// the format: Korean already renders the last minute as "1분 미만", wider
-    /// than its own "59분", and one more language is all it would take for the
-    /// minutes shape to overrun a reservation sized from the hours one.
+    /// Not "100%". Reserving its fourth digit costs a digit of empty space on
+    /// every other reading the bar ever shows, to spare one step on the reading
+    /// it shows last: a full window only reads "100%" at exactly 100 —
+    /// `Percent.whole` holds 99.6 at "99" — and once it is full it stays full
+    /// until it resets. So the item steps out a digit once per window, at the
+    /// limit, and holds; it does not shuffle back and forth.
+    private static let percentShapes = ["99%", "<1%", StatusItemSummary.Entry.unknown]
+
+    /// A five-hour countdown in each shape the bar prints it: the hours shape,
+    /// which it now keeps all the way down to "0h 01m", the last minute, and
+    /// the dash for no reading.
+    ///
+    /// The hours shape is the widest of those in every language shipped today.
+    /// It is measured rather than assumed because that is a fact about those
+    /// translations, not about the format: Korean renders the last minute as
+    /// "1분 미만", wider than its own "59분", and one more language is all it
+    /// would take for a reservation sized from the hours shape to be short.
     private var countdownShapes: [String] {
         let now = Date(timeIntervalSinceReferenceDate: 0)
         func countdown(_ left: TimeInterval) -> String {
-            ResetCopy.countdown(to: now.addingTimeInterval(left), now: now) ?? ""
+            ResetCopy.countdown(to: now.addingTimeInterval(left), now: now,
+                                alwaysHours: true) ?? ""
         }
-        return [countdown(5 * 3600 - 30), countdown(59 * 60), countdown(30),
+        return [countdown(5 * 3600 - 30), countdown(60), countdown(30),
                 StatusItemSummary.Entry.unknown]
     }
 
